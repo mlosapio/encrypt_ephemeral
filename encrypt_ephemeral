@@ -1,0 +1,81 @@
+#!/bin/sh
+
+# Init script to encrypt ephemeral drives on AWS
+# Please see license.txt in github project
+# mike@losap.io - 2016
+
+### BEGIN INIT INFO
+# Provides:          encrypt_ephemeral 
+# Required-Start:    networking
+# Required-Stop:     networking
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Encrypt ephemeral drives 
+# Description:       Randomly encrypt ephemeral drives 
+#                    into a raid0 configuration
+#                    mounted to /scratch 
+### END INIT INFO
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+MOUNTPOINT=/scratch
+RAID_THEN_ENCRYPT=true
+
+# Globally accessible list called CRYPTO_DEVS
+
+mount_raid () {
+    if [ ! -d ${MOUNTPOINT} ]; then
+        mkdir ${MOUNTPOINT} && chmod 700 ${MOUNTPOINT} 
+    fi
+    mount /dev/md0 ${MOUNTPOINT} && chmod 777 ${MOUNTPOINT} 
+}
+
+remove_scratch () {
+    rmdir ${MOUNTPOINT} 
+}
+
+close_encryption () {
+    for CRYPTO_DEV in ${CRYPTO_DEVS}; do
+        cryptsetup luksClose ${CRYPTO_DEV}
+    done
+}
+
+check_status () {
+    if ! grep -q " ${MOUNTPOINT} " /proc/mounts; then
+        echo -n "${MOUNTPOINT} not mounted"
+        exit 1
+    elif [ ! -d ${MOUNTPOINT} ]; then
+        echo -n "Mount point ${MOUNTPOINT} does not exist"
+        exit 1
+    fi
+}
+
+case "$1" in
+        start)
+            start
+            ;;
+         
+        stop)
+            stop
+            ;;
+         
+        status)
+            status anacron
+            ;;
+        restart)
+            stop
+            start
+            ;;
+        condrestart)
+            if test "x`pidof anacron`" != x; then
+                stop
+                start
+            fi
+            ;;
+         
+        *)
+            echo $"Usage: $0 {start|stop|restart|condrestart|status}"
+            exit 1
+ 
+esac
