@@ -21,8 +21,13 @@
 
 MOUNTPOINT=/scratch
 RAID_THEN_ENCRYPT=true
+DEVICES=$(curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/ | grep ephemeral)
 
 # Globally accessible list called CRYPTO_DEVS
+
+function install_prereqs {
+    yum -y -d0 install mdadm curl cryptsetup
+}
 
 mount_raid () {
     if [ ! -d ${MOUNTPOINT} ]; then
@@ -50,6 +55,80 @@ check_status () {
         exit 1
     fi
 }
+
+function make_crypt () {
+    ## RAW /dev/xvdb BLOCK_LIST
+    BLOCK_LIST="${@}" 
+    echo "Received block list as ${BLOCK_LIST}"
+    LUKS_LIST=""
+    for DEV in ${BLOCK_LIST}; do
+        echo "Encrypting device ${DEV}"
+        DEV_NAME=$(echo $DEV | cut -f3 -d/)
+        cryptsetup -d /dev/random create luks_${DEV_NAME} ${DEV} 
+        LUKS_DRIVES="${LUKS_DRIVES} /dev/mapper/luks_${DEV_NAME}"
+    done
+} 
+
+function initialize_disks {
+    for DRIVE in ${DRIVES}; do
+        echo "Unmounting ${DRIVE}"
+        umount ${DRIVE}
+        dd if=/dev/zero of=${DRIVE} bs=1024 count=1024
+    done
+}
+
+function populate_root_drive {
+    ROOT_DRIVE=`df -h | grep -v grep | awk 'NR==2{print $1}'`
+
+    if [ "$root_drive" == "/dev/xvda1" ]; then
+        echo "Detected 'xvd' drive naming scheme (root: ${ROOT_DRIVE})"
+        DRIVE_SCHEME='xvd'
+    else
+        echo "Detected 'sd' drive naming scheme (root: ${ROOT_DRIVE})"
+        DRIVE_SCHEME='sd'
+    fi
+}
+
+function get_ephemerals {
+
+    EPHEMERAL_COUNT=0
+
+    for DISK in $DEVICES; do
+        echo "Probing ${DISK}..."
+        BLOCK_DEVICE=$(curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/${DISK})
+        BLOCK_DEVICE_NAME=$(echo ${BLOCK_DEVICE} | sed "s/sd/${DRIVE_SCHEME}/")
+        BLOCK_DEVICE_PATH="/dev/${BLOCK_DEVICE_NAME}"
+
+        if [ -b ${BLOCK_DEVICE_PATH} ]; then
+            echo "Detected ephemeral disk: ${BLOCK_DEVICE_PATH}"
+            DRIVES="${DRIVES} ${BLOCK_DEVICE_PATH}"
+            EPHEMERAL_COUNT=$((EPHEMERAL_COUNT + 1))
+        else
+            echo "Ephemeral disk ${DISK}, ${BLOCK_DEVICE_PATH} is not present. Skipping..."
+        fi
+    done
+
+    if [ "${EPHEMERAL_COUNT}" = 0 ]; then
+        echo "No ephemeral disk detected"
+        exit 0
+    fi
+}
+
+### copy paste from another script I was working on ###
+populate_root_drive
+
+get_ephemerals
+
+echo "${EPHEMERAL_COUNT} drives detected as ${DRIVES}"
+
+initialize_disks 
+
+make_crypt "${DRIVES}"
+
+echo "LUKS_DRIVES as ${LUKS_DRIVES}"
+
+/sbin/mdadm --create --verbose /dev/md0 --level=0 -c256 --raid-devices=${EPHEMERAL_COUNT} ${LUKS_DRIVES}
+####
 
 case "$1" in
         start)
